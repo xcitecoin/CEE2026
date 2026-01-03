@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MDMS Friends Study Portal</title>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <style>
+        :root { --primary: #0f172a; --accent: #3b82f6; --success: #10b981; --bg: #f1f5f9; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: var(--bg); margin: 0; color: #1e293b; line-height: 1.6; }
+        .container { max-width: 1000px; margin: 0 auto; padding: 20px; }
+        
+        header { background: var(--primary); color: white; padding: 1rem 2rem; display: flex; justify-content: space-between; align-items: center; border-radius: 0 0 15px 15px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); }
+        .card { background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05); margin-bottom: 25px; }
+        
+        /* Leaderboard Style */
+        .leaderboard { width: 100%; border-collapse: collapse; margin-top: 15px; background: white; border-radius: 10px; overflow: hidden; }
+        .leaderboard th { background: #e2e8f0; padding: 12px; text-align: left; }
+        .leaderboard td { padding: 12px; border-bottom: 1px solid #f1f5f9; }
+        .top-scorer { background: #ecfdf5; font-weight: bold; color: var(--success); }
+
+        .btn { cursor: pointer; padding: 12px 24px; border: none; border-radius: 8px; background: var(--accent); color: white; font-weight: 600; transition: 0.2s; }
+        .btn:hover { opacity: 0.9; transform: translateY(-1px); }
+        .btn-green { background: var(--success); }
+        
+        textarea { width: 100%; height: 150px; border: 1px solid #cbd5e1; border-radius: 8px; padding: 12px; font-family: monospace; margin: 10px 0; }
+        .option-label { display: block; padding: 15px; margin: 10px 0; border: 2px solid #e2e8f0; border-radius: 10px; cursor: pointer; }
+        .option-label:has(input:checked) { border-color: var(--accent); background: #eff6ff; }
+        
+        .explanation { display: none; background: #fffbeb; padding: 15px; border-left: 4px solid #f59e0b; margin-top: 15px; font-size: 0.95em; }
+        .hidden { display: none; }
+    </style>
+</head>
+<body>
+
+<header>
+    <div style="font-size: 1.4rem; font-weight: 800; letter-spacing: -0.5px;">MDMS HUB</div>
+    <div>
+        <span style="margin-right:10px; opacity:0.8">Logged in as:</span>
+        <select id="user-select" onchange="fetchScores()" style="padding: 6px 12px; border-radius: 6px; font-weight:600;">
+            <option value="Akash">Akash</option>
+            <option value="Aashish">Aashish</option>
+            <option value="Ashes">Ashes</option>
+            <option value="Santosh">Santosh</option>
+        </select>
+    </div>
+</header>
+
+<div class="container">
+    <div class="card">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+            <h3 style="margin:0">🏆 Friend Comparison Portal</h3>
+            <button class="btn" onclick="fetchScores()">Refresh Leaderboard</button>
+        </div>
+        <table class="leaderboard">
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>Set Name</th>
+                    <th>Score (Neg Mark Incl.)</th>
+                    <th>Correct/Wrong</th>
+                </tr>
+            </thead>
+            <tbody id="leaderboard-body">
+                <tr><td colspan="4" style="text-align:center;">Loading scores...</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <div class="card">
+        <h3>Upload Set (Daily Update)</h3>
+        <input type="text" id="set-name-input" placeholder="Enter Set Name (e.g., Set 2 - 2082-10-14)" style="width: 97%; padding: 12px; border-radius: 8px; border: 1px solid #cbd5e1;">
+        <p style="font-size: 0.8em; color: #64748b; margin-top: 10px;">Format: Question|A|B|C|D|CorrectIndex(0-3)|Explanation</p>
+        <textarea id="set-data-input" placeholder="Example: Heart has?|2 chambers|4 chambers|3 chambers|1 chamber|1|Human heart has 4 chambers."></textarea>
+        <button class="btn btn-green" onclick="saveSetLocally()">Add Set to Dashboard</button>
+    </div>
+
+    <div id="set-selection-list">
+        <h3>Available Daily Sets</h3>
+        <div id="sets-container"></div>
+    </div>
+
+    <div id="quiz-area" class="hidden">
+        <div class="card" style="position: sticky; top: 10px; z-index: 100; display:flex; justify-content:space-between; align-items:center;">
+            <button class="btn" onclick="closeQuiz()" style="background:#64748b">← Back</button>
+            <strong id="active-set-title"></strong>
+            <button class="btn btn-green" onclick="submitResult()">Finish & Upload Score</button>
+        </div>
+        <div id="questions-list"></div>
+    </div>
+</div>
+
+<script>
+    // SUPABASE CREDENTIALS
+    const SB_URL = "https://bmoznmnockcaneapwjkq.supabase.co";
+    const SB_KEY = "sb_publishable_RGMV_tPoZufNdkRG6oeN3g_odvBRXs3";
+    const _supabase = supabase.createClient(SB_URL, SB_KEY);
+
+    let activeSet = null;
+
+    // 1. Fetch scores for the comparison portal
+    async function fetchScores() {
+        const { data, error } = await _supabase
+            .from('exam_results')
+            .select('*')
+            .order('score', { ascending: false });
+
+        if (error) return;
+
+        const body = document.getElementById('leaderboard-body');
+        body.innerHTML = data.map((row, index) => `
+            <tr class="${index === 0 ? 'top-scorer' : ''}">
+                <td>${row.username}</td>
+                <td>${row.set_name}</td>
+                <td>${row.score.toFixed(2)}</td>
+                <td><small>${row.correct_count}C / ${row.wrong_count}W</small></td>
+            </tr>
+        `).join('');
+    }
+
+    // 2. Set Management
+    function saveSetLocally() {
+        const name = document.getElementById('set-name-input').value;
+        const raw = document.getElementById('set-data-input').value;
+        if(!name || !raw) return alert("Fill Name and Data!");
+
+        const questions = raw.split('\n').filter(line => line.includes('|')).map(line => {
+            const p = line.split('|');
+            return { q: p[0], opts: [p[1], p[2], p[3], p[4]], correct: parseInt(p[5]), exp: p[6] };
+        });
+
+        const allSets = JSON.parse(localStorage.getItem('mdms_all_sets') || '[]');
+        allSets.push({ id: Date.now(), name, questions });
+        localStorage.setItem('mdms_all_sets', JSON.stringify(allSets));
+        
+        document.getElementById('set-name-input').value = '';
+        document.getElementById('set-data-input').value = '';
+        renderSets();
+    }
+
+    function renderSets() {
+        const sets = JSON.parse(localStorage.getItem('mdms_all_sets') || '[]');
+        document.getElementById('sets-container').innerHTML = sets.map(s => `
+            <div class="card" style="display:flex; justify-content:space-between; align-items:center;">
+                <div><strong>${s.name}</strong> <br><small>${s.questions.length} Questions</small></div>
+                <button class="btn" onclick="openQuiz(${s.id})">Solve</button>
+            </div>
+        `).join('');
+    }
+
+    // 3. Quiz Engine
+    function openQuiz(id) {
+        const sets = JSON.parse(localStorage.getItem('mdms_all_sets') || '[]');
+        activeSet = sets.find(s => s.id === id);
+        
+        document.getElementById('set-selection-list').classList.add('hidden');
+        document.getElementById('quiz-area').classList.remove('hidden');
+        document.getElementById('active-set-title').innerText = activeSet.name;
+
+        document.getElementById('questions-list').innerHTML = activeSet.questions.map((q, i) => `
+            <div class="card">
+                <h4>${i+1}. ${q.q}</h4>
+                ${q.opts.map((o, oi) => `
+                    <label class="option-label">
+                        <input type="radio" name="q${i}" value="${oi}"> ${o}
+                    </label>
+                `).join('')}
+                <div class="explanation" id="exp-${i}"><strong>Answer:</strong> ${q.opts[q.correct]}<br><em>${q.exp}</em></div>
+            </div>
+        `).join('');
+    }
+
+    // 4. Submission & Scoring
+    async function submitResult() {
+        const user = document.getElementById('user-select').value;
+        let correct = 0;
+        let wrong = 0;
+
+        activeSet.questions.forEach((q, i) => {
+            const selected = document.querySelector(`input[name="q${i}"]:checked`);
+            if(selected) {
+                if(parseInt(selected.value) === q.correct) correct++;
+                else wrong++;
+            }
+            document.getElementById(`exp-${i}`).style.display = 'block';
+        });
+
+        const score = correct - (wrong * 0.33);
+
+        const { error } = await _supabase.from('exam_results').insert([
+            { 
+                username: user, 
+                set_name: activeSet.name, 
+                score: score, 
+                correct_count: correct, 
+                wrong_count: wrong 
+            }
+        ]);
+
+        if(error) {
+            alert("Database Error: " + error.message);
+        } else {
+            alert(`Score Submitted! You got ${score.toFixed(2)}`);
+            fetchScores();
+            window.scrollTo(0,0);
+        }
+    }
+
+    function closeQuiz() {
+        document.getElementById('set-selection-list').classList.remove('hidden');
+        document.getElementById('quiz-area').classList.add('hidden');
+    }
+
+    window.onload = () => { renderSets(); fetchScores(); };
+</script>
+
+</body>
+</html>
